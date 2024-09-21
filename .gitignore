@@ -1,4 +1,8 @@
 __pycache__/
+db/__pycache__/
+models/__pycache__/
+utils/__pycache__/
+websocket/__pycache__/
 venv/
 static/
 .env
