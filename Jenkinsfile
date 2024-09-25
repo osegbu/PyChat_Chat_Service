@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        label 'docker-agent-alpine'
+        label 'docker'
     }
     environment {
         DOCKER_IMAGE = "osegbu/PyChat_Chat_Service:latest"
