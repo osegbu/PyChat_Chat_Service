@@ -1,65 +1,58 @@
 pipeline {
     agent any
-
     environment {
-        DOCKER_CREDENTIALS_ID = 'docker' // Jenkins credential ID for Docker Hub
-        DOCKER_IMAGE = 'osegbu/chat-service' // Your Docker Hub image name
+        DOCKER_IMAGE = "osegbu/PyChat_Chat_Service:latest"
     }
-
     stages {
-        stage('Clone Repository') {
+        stage('Clone repository') {
             steps {
-                git branch: 'main', url: 'https://github.com/osegbu/PyChat_Chat_Service'
+                git branch: 'main', url: 'https://github.com/osegbu/PyChat_Chat_Service.git'
             }
         }
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Build the Docker image
-                    docker.build(DOCKER_IMAGE)
+                    // Build the Docker image with the given tag
+                    def app = docker.build("${DOCKER_IMAGE}", ".")
                 }
             }
         }
-        stage('Run Tests') {
+        stage('Run Application and Health Check') {
             steps {
                 script {
-                    // Run the Docker container and execute tests
-                    def app = docker.image(DOCKER_IMAGE)
-                    app.run("-d -p 8001:8001")
-                    // Ensure pytest is in the image and run tests
-                    app.inside {
-                        sh 'pytest'
-                    }
-                    // Optionally, stop and remove the container after tests
-                    sh 'docker ps -q --filter "ancestor=${DOCKER_IMAGE}" | xargs docker stop'
-                    sh 'docker ps -aq --filter "ancestor=${DOCKER_IMAGE}" | xargs docker rm'
-                }
-            }
-        }
-        stage('Push Docker Image') {
-            steps {
-                script {
-                    // Login to Docker Hub
-                    docker.withRegistry('https://index.docker.io/v1/', DOCKER_CREDENTIALS_ID) {
-                        // Push the image to Docker Hub
-                        docker.image(DOCKER_IMAGE).push()
+                    // Run the Docker container in detached mode
+                    def app = docker.image("${DOCKER_IMAGE}")
+                    app.run("-d -p 8001:8001 --name chat_service")
+
+                    // Perform health check
+                    def response = sh(
+                        script: "curl --write-out %{http_code} --silent --output /dev/null http://localhost:8001/docs",
+                        returnStdout: true
+                    ).trim()
+
+                    // Check if the response code is 200
+                    if (response == "200") {
+                        echo "Application started successfully."
+                    } else {
+                        error "Health check failed. Application not running correctly."
                     }
                 }
             }
         }
-        stage('Deploy') {
+        stage('Cleanup') {
             steps {
                 script {
-                    // Add your deployment steps here
-                    echo 'Deploying application...'
+                    // Stop and remove the Docker container after the health check
+                    sh 'docker stop chat_service || true'
+                    sh 'docker rm chat_service || true'
                 }
             }
         }
     }
     post {
         always {
-            // Clean up Docker images
-            sh "docker rmi ${DOCKER_IMAGE} || true"
+            // Clean up the Docker image to save space
+            sh 'docker rmi ${DOCKER_IMAGE} || true'
         }
     }
 }
