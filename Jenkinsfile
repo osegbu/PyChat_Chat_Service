@@ -26,12 +26,12 @@ pipeline {
                     
                     app.run("-d -p 8001:8001 --name chat_service " +
                              "-e DB_USER='postgres' " +
-                             "-e DB_PWD='${DB_PWD}' " +
+                             "-e DB_PWD='Icui4cu' " +
                              "-e DB_NAME='project' " +
                              "-e DB_HOST='localhost' " +
                              "-e DB_PORT='5432' " +
                              "-e API_KEY='Icui4cu@' " +
-                             "-e SECRET_KEY='${SECRET_KEY}' " +
+                             "-e SECRET_KEY='Trdti00GrZiWdXl04zel3GekKcMXaPT5e3Ep+zCbcys=' " +
                              "-e ALGORITHM='HS256' " +
                              "-e WEBSOCKET_TIMEOUT='15'")
 
