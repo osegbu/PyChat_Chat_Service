@@ -1,7 +1,7 @@
 pipeline {
     agent any
     environment {
-        DOCKER_IMAGE = "osegbu/PyChat_Chat_Service:latest"
+        DOCKER_IMAGE = "osegbu/pychat-chat-service:latest"
     }
     stages {
         stage('Clone repository') {
