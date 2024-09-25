@@ -1,5 +1,6 @@
 pipeline {
     agent any
+
     environment {
         DOCKER_IMAGE = "osegbu/pychat-chat-service:latest"
     }
