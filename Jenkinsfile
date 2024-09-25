@@ -21,9 +21,19 @@ pipeline {
         stage('Run Application and Health Check') {
             steps {
                 script {
-                    // Run the Docker container in detached mode
+                    // Run the Docker container in detached mode with environment variables
                     def app = docker.image("${DOCKER_IMAGE}")
-                    app.run("-d -p 8001:8001 --name chat_service")
+                    
+                    app.run("-d -p 8001:8001 --name chat_service " +
+                             "-e DB_USER='postgres' " +
+                             "-e DB_PWD='${DB_PWD}' " +
+                             "-e DB_NAME='project' " +
+                             "-e DB_HOST='localhost' " +
+                             "-e DB_PORT='5432' " +
+                             "-e API_KEY='Icui4cu@' " +
+                             "-e SECRET_KEY='${SECRET_KEY}' " +
+                             "-e ALGORITHM='HS256' " +
+                             "-e WEBSOCKET_TIMEOUT='15'")
 
                     // Perform health check
                     def response = sh(
