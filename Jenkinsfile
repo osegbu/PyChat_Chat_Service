@@ -9,7 +9,7 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                git branch: 'main', url: 'https://github.com/osegbu/PyChat-Chat-Service'
+                git branch: 'main', url: 'https://github.com/osegbu/PyChat_Chat_Service'
             }
         }
         stage('Build Docker Image') {
