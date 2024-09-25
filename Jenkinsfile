@@ -3,12 +3,12 @@ pipeline {
         label 'docker-agent-alpine'
     }
     environment {
-        DOCKER_IMAGE = "your_dockerhub_username/chat_service:latest"
+        DOCKER_IMAGE = "osegbu/PyChat_Chat_Service:latest"
     }
     stages {
         stage('Clone repository') {
             steps {
-                git 'https://github.com/your_repo/chat_service.git'
+                git branch: 'main', url: 'git@github.com:osegbu/PyChat_Chat_Service.git'
             }
         }
         stage('Build Docker Image') {

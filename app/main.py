@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+if not os.path.exists("./static"):
+    os.makedirs("./static")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db_conn()
