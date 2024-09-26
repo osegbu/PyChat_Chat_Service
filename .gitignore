@@ -3,6 +3,7 @@ db/__pycache__/
 models/__pycache__/
 utils/__pycache__/
 websocket/__pycache__/
+chat-service-deployment.yaml
 venv/
 static/
 .env

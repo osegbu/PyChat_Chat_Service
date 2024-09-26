@@ -5,8 +5,7 @@ pipeline {
         IMAGE_NAME = 'osegbu/pychat-chat-service'
         SSH_USER = 'ec2-user'
         SSH_HOST = 'ec2-3-83-203-73.compute-1.amazonaws.com'
-        SSH_KEY = '/path/to/my-ec2-01-RSA-key.pem'
-        DEPLOYMENT_FILE_PATH = '~/deployment.yaml'
+        DEPLOYMENT_FILE_PATH = '~/chat-service-deployment.yaml'
     }
 
     stages {
