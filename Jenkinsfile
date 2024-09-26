@@ -2,59 +2,58 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "osegbu/pychat-chat-service:latest"
+        IMAGE_NAME = 'osegbu/pychat-chat-service'
+        SSH_USER = 'ec2-user'
+        SSH_HOST = 'ec2-3-83-203-73.compute-1.amazonaws.com'
+        SSH_KEY = '/path/to/my-ec2-01-RSA-key.pem'
+        DEPLOYMENT_FILE_PATH = '~/deployment.yaml'
     }
+
     stages {
-        stage('Clone repository') {
+        stage('Clone Repository') {
             steps {
                 git branch: 'main', url: 'https://github.com/osegbu/PyChat_Chat_Service.git'
             }
         }
+
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Build the Docker image with the given tag
-                    def app = docker.build("${DOCKER_IMAGE}", ".")
+                    sh 'docker build -t $IMAGE_NAME:$BUILD_NUMBER .'
                 }
             }
         }
-        stage('Run Application and Health Check') {
+
+        stage('Push Docker Image') {
             steps {
                 script {
-                    // Run the Docker container in detached mode with environment variables
-                    def app = docker.image("${DOCKER_IMAGE}")
-                    
-                    app.run("-d -p 8001:8001 --name chat_service")
-
-                    // Perform health check
-                    def response = sh(
-                        script: "curl --write-out %{http_code} --silent --output /dev/null http://localhost:8001/docs",
-                        returnStdout: true
-                    ).trim()
-
-                    // Check if the response code is 200
-                    if (response == "200") {
-                        echo "Application started successfully."
-                    } else {
-                        error "Health check failed. Application not running correctly."
+                    docker.withRegistry('https://index.docker.io/v1/', 'docker') {
+                        sh 'docker push ${IMAGE_NAME}:${BUILD_NUMBER}'
                     }
                 }
             }
         }
-        stage('Cleanup') {
+
+        stage('Deploy to k3s via SSH') {
             steps {
                 script {
-                    // Stop and remove the Docker container after the health check
-                    sh 'docker stop chat_service || true'
-                    sh 'docker rm chat_service || true'
+                    withCredentials([sshUserPrivateKey(credentialsId: 'my-ec2-ssh-key', 
+                                                      keyFileVariable: 'SSH_KEY_PATH')]) {
+                        sh '''
+                        ssh -i $SSH_KEY_PATH $SSH_USER@$SSH_HOST << EOF
+                            sudo sed -i 's|image: .*|image: $IMAGE_NAME:$BUILD_NUMBER|' $DEPLOYMENT_FILE_PATH
+                            sudo kubectl apply -f $DEPLOYMENT_FILE_PATH
+                        EOF
+                        '''
+                    }
                 }
             }
         }
     }
+
     post {
         always {
-            // Clean up the Docker image to save space
-            sh 'docker rmi ${DOCKER_IMAGE} || true'
+            sh 'docker rmi $IMAGE_NAME:$BUILD_NUMBER || true'
         }
     }
 }
