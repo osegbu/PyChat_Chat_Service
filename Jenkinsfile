@@ -4,7 +4,7 @@ pipeline {
     environment {
         IMAGE_NAME = 'osegbu/pychat-chat-service'
         SSH_USER = 'ec2-user'
-        SSH_HOST = 'ec2-3-83-203-73.compute-1.amazonaws.com'
+        SSH_HOST = 'ec2-100-26-193-126.compute-1.amazonaws.com'
         DEPLOYMENT_FILE_PATH = '~/chat-service-deployment.yaml'
     }
 
