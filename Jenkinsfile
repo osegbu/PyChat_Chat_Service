@@ -38,8 +38,7 @@ pipeline {
                 script {
                     withCredentials([sshUserPrivateKey(credentialsId: 'my-ec2-ssh-key', 
                                                       keyFileVariable: 'SSH_KEY_PATH')]) {
-                        // Use a single SSH command with semicolons to separate commands
-                        sh """
+			sh """
                         ssh -o StrictHostKeyChecking=no -i \$SSH_KEY_PATH \$SSH_USER@\${SSH_HOST} "
                             sudo sed -i 's|image: .*|image: $IMAGE_NAME:$BUILD_NUMBER|' $DEPLOYMENT_FILE_PATH; 
                             sudo kubectl apply -f $DEPLOYMENT_FILE_PATH
