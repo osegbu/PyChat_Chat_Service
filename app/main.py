@@ -98,7 +98,6 @@ async def handle_received_data(websocket: WebSocket, data: str):
         logger.error(f"Unexpected error while handling data: {e}")
 
 
-# Chat message handler
 async def handleChat(json_data: dict):
     try:
         sender_id = int(json_data['sender_id'])
