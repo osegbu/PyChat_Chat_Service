@@ -39,7 +39,9 @@ app = FastAPI(lifespan=lifespan)
 app.mount('/static', StaticFiles(directory='./static'), name='static')
 
 
-origins = ['http://localhost', 'http://localhost:3000']
+origins = [
+    os.getenv("HOST_URL")
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,7 +51,7 @@ app.add_middleware(
     allow_headers=['*']
 )
 
-SECRET_KEY = os.getenv("SECRET_KEY")
+SECRET_KEY = os.getenv("AUTH_SECRET")
 ALGORITHM = os.getenv("ALGORITHM")
 WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT"))
 
