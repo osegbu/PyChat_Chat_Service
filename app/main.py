@@ -75,7 +75,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
         await manager.disconnect(user_id)
         logger.info(f"User {user_id} disconnected disconnected from {websocket.client}")
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error:{e}")
     finally:
         logger.info(f"Cleaned up connection for user {user_id}")
 
