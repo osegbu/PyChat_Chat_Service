@@ -40,7 +40,7 @@ app.mount('/static', StaticFiles(directory='./static'), name='static')
 
 
 origins = [
-    os.getenv("HOST_URL")
+    os.getenv("AUTH_URL")
 ]
 
 app.add_middleware(
