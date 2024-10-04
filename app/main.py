@@ -87,9 +87,11 @@ async def handle_received_data(websocket: WebSocket, data: str):
         if message_type == 'chat':
             await handleChat(json_data)
         elif message_type in ['typing', 'blur']:
-            await manager.typingIndicator(message_type, json_data['receiver_id'], json_data['sender_id'])
+            await manager.typing_indicator(message_type, json_data['receiver_id'], json_data['sender_id'])
         elif message_type == 'ping':
             await websocket.send_text(json.dumps({'type': 'pong', 'user_id': json_data['user_id']}))
+        elif message_type == 'ack':
+            await manager.acknowledge_message(json_data['message_id'])
     except json.JSONDecodeError:
         logger.error("Received invalid JSON data")
     except KeyError as e:
@@ -120,6 +122,7 @@ async def handleChat(json_data: dict):
         
         if result:
             await manager.update_msg_status(sender_id, uuid, "sent")
+
             if sender_id != receiver_id:
                 await manager.send_message(result)
                 logger.info(f"Message sent from user {sender_id} to {receiver_id}")
