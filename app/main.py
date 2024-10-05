@@ -170,7 +170,7 @@ async def load_chat(
                 SELECT id, sender_id, receiver_id, message, timestamp, uuid, image
                 FROM chat 
                 WHERE sender_id=$1 OR receiver_id=$1 
-                ORDER BY id
+                ORDER BY timestamp
                 """
                 result = await execute_query(select_query, query, id)
                 return result if result else []
