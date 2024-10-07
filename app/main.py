@@ -8,6 +8,9 @@ from datetime import datetime
 import base64
 import asyncio
 from contextlib import asynccontextmanager
+from jose import JWTError, jwt
+from dotenv import load_dotenv
+import os
 
 from app.utils.checkapikey import check_api_key
 from app.websocket.connectionmanager import manager
@@ -15,9 +18,6 @@ from app.db.init_db import db_conn, db_close
 from app.db.query import execute_query, insert_query, select_query
 from app.models.validations import ImageUpload
 import aiofiles
-from jose import JWTError, jwt
-from dotenv import load_dotenv
-import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,22 +27,28 @@ load_dotenv()
 if not os.path.exists("./static"):
     os.makedirs("./static")
 
+SECRET_KEY = os.getenv("AUTH_SECRET")
+ALGORITHM = os.getenv("ALGORITHM")
+WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT"))
+
+security = HTTPBearer()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db_conn()
-    logger.info("Server started...")
+    await manager.init_redis()
+    logger.info("Server and Redis started...")
+    
     yield
+    await manager.close_redis()
     await db_close()
-    logger.info("Server shuting down...")
+    logger.info("Server and Redis shutting down...")
 
 app = FastAPI(lifespan=lifespan)
 app.mount('/static', StaticFiles(directory='./static'), name='static')
 
-
-origins = [
-    os.getenv("AUTH_URL")
-]
-
+# CORS setup
+origins = [os.getenv("AUTH_URL")]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -50,13 +56,6 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*']
 )
-
-SECRET_KEY = os.getenv("AUTH_SECRET")
-ALGORITHM = os.getenv("ALGORITHM")
-WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT"))
-
-
-security = HTTPBearer()
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: int):
@@ -73,7 +72,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
                 break
     except WebSocketDisconnect:
         await manager.disconnect(user_id)
-        logger.info(f"User {user_id} disconnected disconnected from {websocket.client}")
+        logger.info(f"User {user_id} disconnected from {websocket.client}")
     except Exception as e:
         logger.error(f"Error:{e}")
     finally:
@@ -91,14 +90,13 @@ async def handle_received_data(websocket: WebSocket, data: str):
         elif message_type == 'ping':
             await websocket.send_text(json.dumps({'type': 'pong', 'user_id': json_data['user_id']}))
         elif message_type == 'ack':
-            await manager.acknowledge_message(json_data['message_id'])
+            await manager.acknowledge_message(json_data['message_id'], int(json_data['receiver_id']))
     except json.JSONDecodeError:
         logger.error("Received invalid JSON data")
     except KeyError as e:
         logger.error(f"Missing key in received data: {e}")
     except Exception as e:
         logger.error(f"Unexpected error while handling data: {e}")
-
 
 async def handleChat(json_data: dict):
     try:
@@ -129,8 +127,6 @@ async def handleChat(json_data: dict):
     except Exception as e:
         logger.error(f"Error handling chat message: {e}")
 
-
-# File upload handler
 async def handleFileUpload(file_data: dict):
     try:
         file_name = file_data['name']
@@ -140,7 +136,6 @@ async def handleFileUpload(file_data: dict):
 
         ImageUpload(content_type=file_type, size=file_size)
         file_content = base64.b64decode(base64_data)
-        
 
         unique_file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}{os.path.splitext(file_name)[1]}"
         file_path = os.path.join("static", unique_file_name)
@@ -154,27 +149,24 @@ async def handleFileUpload(file_data: dict):
         logger.error(f"Error uploading file: {e}")
         raise
 
-
-@app.post("/load_chat/{id}", description="Load user's chat history")
+@app.post("/load_chat/{id}")
 async def load_chat(
-    id: int = Path(..., description="The id of the user you want to load all chats", gt=0),
+    id: int = Path(..., gt=0),
     api_key: str = Depends(check_api_key),
     credentials: HTTPAuthorizationCredentials = Depends(security)
-    ):
+):
     token = credentials.credentials
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload:
-            if payload['id'] == str(id):
-                query = """
-                SELECT id, sender_id, receiver_id, message, timestamp, uuid, image
-                FROM chat 
-                WHERE sender_id=$1 OR receiver_id=$1 
-                ORDER BY timestamp
-                """
-                result = await execute_query(select_query, query, id)
-                return result if result else []
+        if payload and payload['id'] == str(id):
+            query = """
+            SELECT id, sender_id, receiver_id, message, timestamp, uuid, image
+            FROM chat 
+            WHERE sender_id=$1 OR receiver_id=$1 
+            ORDER BY timestamp DESC
+            """
+            result = await execute_query(select_query, query, id)
+            return result if result else []
     except Exception as e:
-        print('failed')
         logger.error(f"Failed to load chat history for user {id}: {e}")
         raise

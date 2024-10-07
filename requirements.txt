@@ -6,3 +6,4 @@ pydantic==2.8.2
 python-dotenv==1.0.1
 python-jose==3.3.0
 aiofiles==24.1.0
+aioredis==2.0.1
