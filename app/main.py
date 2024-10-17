@@ -1,26 +1,23 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Path, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import aiosqlite
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import logging
 import json
 from datetime import datetime
 import base64
 import asyncio
 from contextlib import asynccontextmanager
-from jose import JWTError, jwt
 from dotenv import load_dotenv
 import os
-
-from app.utils.checkapikey import check_api_key
-from app.websocket.connectionmanager import manager
-from app.db.init_db import db_conn, db_close
-from app.db.query import execute_query, insert_query, select_query
+from app.websocket.connectionmanager import ConnectionManager
 from app.models.validations import ImageUpload
 import aiofiles
+from app.routes.chat_route import chat_router
+from app.routes.login_route import login_router
+from app.routes.signup_router import signup_router
+from app.routes.logout_router import logout_router
+from app.routes.get_users_router import get_users_router
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -30,24 +27,56 @@ if not os.path.exists("./static"):
 SECRET_KEY = os.getenv("AUTH_SECRET")
 ALGORITHM = os.getenv("ALGORITHM")
 WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT"))
-
-security = HTTPBearer()
+REDIS_URL = os.getenv("REDIS_URL")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db_conn()
-    await manager.init_redis()
-    logger.info("Server and Redis started...")
-    
-    yield
-    await manager.close_redis()
-    await db_close()
-    logger.info("Server and Redis shutting down...")
+    global manager
+    global chatdb
+    async with aiosqlite.connect("pychat.db") as db:
+        chatdb = db
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS chat (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER NOT NULL,
+            receiver_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            uuid TEXT NOT NULL UNIQUE,
+            image TEXT,
+            message TEXT
+        );
+        ''')
+        await db.execute('''
+        CREATE INDEX IF NOT EXISTS privatechat_sender_receiver 
+        ON chat(sender_id, receiver_id);
+        ''')
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            profileimage TEXT NOT NULL,
+            password TEXT NOT NULL,
+            status TEXT DEFAULT 'Online'
+        );
+        ''')
+        await db.commit()
+        manager = ConnectionManager(REDIS_URL, chatdb)
+        await manager.init_redis()
+        print("Database and Redis initialized")
+        app.include_router(chat_router(chatdb))
+        app.include_router(login_router(chatdb))
+        app.include_router(signup_router(chatdb))
+        app.include_router(logout_router(chatdb))
+        app.include_router(get_users_router(chatdb))
+
+        yield
+        
+        await manager.close_redis()
+        print("Server and Redis shutting down...")
 
 app = FastAPI(lifespan=lifespan)
 app.mount('/static', StaticFiles(directory='./static'), name='static')
 
-# CORS setup
 origins = [os.getenv("AUTH_URL")]
 app.add_middleware(
     CORSMiddleware,
@@ -66,17 +95,17 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=WEBSOCKET_TIMEOUT)
                 await handle_received_data(websocket, data)
             except asyncio.TimeoutError:
-                logger.warning(f"No ping received from user {user_id}, closing WebSocket")
+                print(f"No ping received from user {user_id}, closing WebSocket")
                 await websocket.close()
                 await manager.disconnect(user_id)
                 break
     except WebSocketDisconnect:
         await manager.disconnect(user_id)
-        logger.info(f"User {user_id} disconnected from {websocket.client}")
+        print(f"User {user_id} disconnected from {websocket.client}")
     except Exception as e:
-        logger.error(f"Error:{e}")
+        print(f"Error: {e}")
     finally:
-        logger.info(f"Cleaned up connection for user {user_id}")
+        print(f"Cleaned up connection for user {user_id}")
 
 async def handle_received_data(websocket: WebSocket, data: str):
     try:
@@ -84,7 +113,7 @@ async def handle_received_data(websocket: WebSocket, data: str):
         message_type = json_data.get('type')
 
         if message_type == 'chat':
-            await handleChat(json_data)
+            await handle_chat(json_data)
         elif message_type in ['typing', 'blur']:
             await manager.typing_indicator(message_type, json_data['receiver_id'], json_data['sender_id'])
         elif message_type == 'ping':
@@ -92,13 +121,13 @@ async def handle_received_data(websocket: WebSocket, data: str):
         elif message_type == 'ack':
             await manager.acknowledge_message(json_data['message_id'], int(json_data['receiver_id']))
     except json.JSONDecodeError:
-        logger.error("Received invalid JSON data")
+        print("Received invalid JSON data")
     except KeyError as e:
-        logger.error(f"Missing key in received data: {e}")
+        print(f"Missing key in received data: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error while handling data: {e}")
+        print(f"Unexpected error while handling data: {e}")
 
-async def handleChat(json_data: dict):
+async def handle_chat(json_data: dict):
     try:
         sender_id = int(json_data['sender_id'])
         receiver_id = int(json_data['receiver_id'])
@@ -109,25 +138,43 @@ async def handleChat(json_data: dict):
 
         image_url = None
         if file_data:
-            image_url = await handleFileUpload(file_data)
-        
-        query = """
-        INSERT INTO chat(sender_id, receiver_id, message, timestamp, uuid, image) 
-        VALUES ($1, $2, $3, $4, $5, $6) 
-        RETURNING id, sender_id, receiver_id, message, timestamp, uuid, image
-        """
-        result = await execute_query(insert_query, query, sender_id, receiver_id, message, timestamp, uuid, image_url)
-        
-        if result:
-            await manager.update_msg_status(sender_id, uuid, "sent")
+            image_url = await handle_file_upload(file_data)
 
-            if sender_id != receiver_id:
-                await manager.send_message(result)
-                logger.info(f"Message sent from user {sender_id} to {receiver_id}")
+        query = '''
+            INSERT INTO chat(sender_id, receiver_id, message, timestamp, uuid, image) 
+            VALUES (?, ?, ?, ?, ?, ?) 
+            RETURNING id, sender_id, receiver_id, message, timestamp, uuid, image
+        '''
+        try:
+            async with chatdb.execute(query, (sender_id, receiver_id, message, timestamp, uuid, image_url)) as cursor:
+                chat_message = await cursor.fetchone()
+                await chatdb.commit()
+            
+                if chat_message:
+                    await manager.update_msg_status(sender_id, uuid, "sent")
+
+                    if sender_id != receiver_id:
+                        chat = {
+                            'id': chat_message[0], 
+                            'sender_id': chat_message[1], 
+                            'receiver_id': chat_message[2], 
+                            'message': chat_message[3], 
+                            'timestamp': chat_message[4], 
+                            'uuid': chat_message[5], 
+                            'image': chat_message[6]
+                        }
+                        await manager.send_message(chat)
+                        print(f"Message sent from user {sender_id} to {receiver_id}")
+
+        except aiosqlite.IntegrityError as e:
+            if "UNIQUE constraint failed: chat.uuid" in str(e):
+                await manager.update_msg_status(sender_id, uuid, "sent")
+            else:
+                raise
     except Exception as e:
-        logger.error(f"Error handling chat message: {e}")
+        print(f"Error handling chat message: {e}")
 
-async def handleFileUpload(file_data: dict):
+async def handle_file_upload(file_data: dict):
     try:
         file_name = file_data['name']
         file_type = file_data['type']
@@ -146,27 +193,5 @@ async def handleFileUpload(file_data: dict):
         return unique_file_name
         
     except Exception as e:
-        logger.error(f"Error uploading file: {e}")
-        raise
-
-@app.post("/load_chat/{id}")
-async def load_chat(
-    id: int = Path(..., gt=0),
-    api_key: str = Depends(check_api_key),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload and payload['id'] == str(id):
-            query = """
-            SELECT id, sender_id, receiver_id, message, timestamp, uuid, image
-            FROM chat 
-            WHERE sender_id=$1 OR receiver_id=$1 
-            ORDER BY timestamp DESC
-            """
-            result = await execute_query(select_query, query, id)
-            return result if result else []
-    except Exception as e:
-        logger.error(f"Failed to load chat history for user {id}: {e}")
+        print(f"Error uploading file: {e}")
         raise

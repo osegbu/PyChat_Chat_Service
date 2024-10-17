@@ -1,85 +1,86 @@
 import uuid
 import time
 import json
-import logging
 import asyncio
 from fastapi import WebSocket
-from app.db.query import execute_query, insert_query
 from dotenv import load_dotenv
-import os
 import aioredis
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-REDIS_URL = os.getenv("REDIS_URL")
-
 class ConnectionManager:
-    def __init__(self, redis_url: str):
+    def __init__(self, redis_url: str, db):
         self.redis = None
         self.redis_url = redis_url
         self.active_connections: dict = {}
         self.pending_messages: dict = {}
+        self.db = db
 
     async def init_redis(self):
         try:
             self.redis = await aioredis.from_url(self.redis_url)
-            logger.info("Connected to Redis")
+            print("Connected to Redis")
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            print(f"Failed to connect to Redis: {e}")
 
     async def close_redis(self):
         if self.redis:
             await self.redis.close()
-            logger.info("Redis connection closed")
+            print("Redis connection closed")
 
     async def connect(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
         if user_id in self.active_connections:
             return
-        query = "UPDATE users SET status = 'Online' WHERE id = $1 RETURNING id"
+        self.active_connections[user_id] = websocket
+        query = "UPDATE users SET status = 'Online' WHERE id = ? RETURNING id"
         try:
-            result = await execute_query(insert_query, query, user_id)
-            if result:
-                self.active_connections[user_id] = websocket
-                await self.notify_status_change(user_id, "Online")
-                await self.send_undelivered_messages(user_id)
+            async with self.db.execute(query, (user_id,)) as cursor:
+                result = await cursor.fetchone()
+                if result:
+                    await self.db.commit()
+                    await self.notify_status_change(user_id, "Online")
+                    await self.send_undelivered_messages(user_id)
         except Exception as e:
-            logger.error(f"Failed to connect user {user_id}: {e}")
+            print(f"Failed to connect user {user_id}: {e}")
+            await self.db.rollback()
 
     async def disconnect(self, user_id: int):
         if user_id not in self.active_connections:
             return
-        query = "UPDATE users SET status = 'Offline' WHERE id = $1 RETURNING id"
+        self.active_connections.pop(user_id)
+        query = "UPDATE users SET status = 'Offline' WHERE id = ? RETURNING id"
         try:
-            result = await execute_query(insert_query, query, user_id)
-            if result:
-                self.active_connections.pop(user_id)
-                await self.notify_status_change(user_id, "Offline")
+            async with self.db.execute(query, (user_id,)) as cursor:
+                result = await cursor.fetchone()
+                if result:
+                    await self.db.commit()
+                    await self.notify_status_change(user_id, "Offline")
         except Exception as e:
-            logger.error(f"Failed to disconnect user {user_id}: {e}")
+            print(f"Failed to disconnect user {user_id}: {e}")
+            await self.db.rollback()
 
     async def store_in_redis(self, receiver_id: int, message_id: str, message: str):
         try:
+            message_id = str(message_id)
             await self.redis.hset(f"undelivered:{receiver_id}", message_id, message)
-            del self.pending_messages[message_id]
+            if message_id in self.pending_messages:
+                del self.pending_messages[message_id]
         except Exception as e:
-            logger.error(f"Failed to store message {message_id} in Redis for user {receiver_id}: {e}")
+            print(f"Error storing message in Redis for receiver {receiver_id}, message_id {message_id}: {e}")
 
     async def retrieve_undelivered_messages(self, user_id: int):
         try:
             return await self.redis.hgetall(f"undelivered:{user_id}")
         except Exception as e:
-            logger.error(f"Failed to retrieve undelivered messages for user {user_id}: {e}")
+            print(f"Failed to retrieve undelivered messages for user {user_id}: {e}")
             return {}
 
     async def delete_message_from_redis(self, receiver_id: int, message_id: str):
         try:
             await self.redis.hdel(f"undelivered:{receiver_id}", message_id)
         except Exception as e:
-            logger.error(f"Failed to delete message {message_id} from Redis for user {receiver_id}: {e}")
+            print(f"Failed to delete message {message_id} from Redis for user {receiver_id}: {e}")
 
     async def send_message(self, result):
         websocket = self.active_connections.get(result['receiver_id'])
@@ -90,7 +91,7 @@ class ConnectionManager:
             await self.queue_message(result['receiver_id'], message, message_id)
         else:
             await self.store_in_redis(result['receiver_id'], message_id, message)
-    
+
     async def update_msg_status(self, user_id: int, uuid: str, event: str):
         websocket = self.active_connections.get(user_id)
         if websocket:
@@ -106,7 +107,7 @@ class ConnectionManager:
                 message = json.dumps({'type': type, 'sender_id': sender_id, 'message_id': message_id})
                 await self.queue_message(receiver_id, message, message_id)
             except Exception as e:
-                logger.error(f"Failed to send typing indicator to {receiver_id}: {e}")
+                print(f"Failed to send typing indicator to {receiver_id}: {e}")
 
     async def acknowledge_message(self, message_id: str, receiver_id: int):
         if message_id in self.pending_messages:
@@ -123,7 +124,6 @@ class ConnectionManager:
                 await self.delete_message_from_redis(user_id, message_id)
             except json.JSONDecodeError as e:
                 print(f"Failed to decode message with ID {message_id}: {e}")
-
 
     async def queue_message(self, receiver_id: int, message: str, message_id: str, retries: int = 5, retry_interval: int = 2):
         self.pending_messages[message_id] = message
@@ -149,14 +149,14 @@ class ConnectionManager:
                         await self.store_in_redis(receiver_id, message_id, message)
                     break
             except Exception as e:
-                logger.error(f"Failed to send message {message_id} to {receiver_id}: {e}")
+                print(f"Failed to send message {message_id} to {receiver_id}: {e}")
                 break
 
         if message_id in self.pending_messages:
             if json.loads(message).get("type") == "chat":
                 await self.store_in_redis(receiver_id, message_id, message)
             else:
-                del self.pending_messages[message_id]  # Remove non-chat messages after retries
+                del self.pending_messages[message_id]
 
     def generate_message_id(self) -> str:
         return f"{uuid.uuid4()}-{int(time.time())}"
@@ -168,5 +168,3 @@ class ConnectionManager:
         for connection_id in self.active_connections.keys():
             if connection_id != user_id:
                 await self.queue_message(connection_id, message, message_id)
-
-manager = ConnectionManager(REDIS_URL)
