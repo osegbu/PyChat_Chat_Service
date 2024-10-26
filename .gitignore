@@ -8,3 +8,4 @@ static/
 fonts/
 .env
 pychat.db
+chat.yaml

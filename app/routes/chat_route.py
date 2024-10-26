@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.utils.checkapikey import check_api_key
 from dotenv import load_dotenv
@@ -21,13 +21,14 @@ def chat_router(chatdb):
         credentials: HTTPAuthorizationCredentials = Depends(security)
     ):
         token = credentials.credentials
+
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             if payload and payload['id'] == str(id):
                 query = '''
                 SELECT id, sender_id, receiver_id, message, timestamp, uuid, image
                 FROM chat 
-                WHERE sender_id=? OR receiver_id=? 
+                WHERE sender_id = ? OR receiver_id = ? 
                 ORDER BY timestamp DESC
                 '''
                 async with chatdb.execute(query, (id, id)) as cursor:
@@ -43,15 +44,17 @@ def chat_router(chatdb):
                                 'timestamp': chat[4], 
                                 'uuid': chat[5], 
                                 'image': chat[6],
-                                'status': 'sent'
                             }
+                            if chat[1] == id:
+                                message['status'] = 'sent'
                             chat_data.append(message)
                         return chat_data
                     else:
                         return []
+            else:
+                raise HTTPException(status_code=403, detail="Unauthorized")
         except Exception as e:
             print(f"Failed to load chat history for user {id}: {e}")
-            raise
+            raise HTTPException(status_code=500, detail="Failed to load chat history")
 
     return router
-
